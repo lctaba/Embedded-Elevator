@@ -1,0 +1,869 @@
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 1   
+
+
+C51 COMPILER V9.57.0.0, COMPILATION OF MODULE ELEVATOR
+OBJECT MODULE PLACED IN .\Objects\elevator.obj
+COMPILER INVOKED BY: D:\Keil uvision C51\install\C51\BIN\C51.EXE elevator.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND 
+                    -PRINT(.\Listings\elevator.lst) TABS(2) OBJECT(.\Objects\elevator.obj)
+
+line level    source
+
+   1          #include "reg51.h"   //声明单片机寄存器
+   2          #include "intrins.h" //使用位移函数
+   3          
+   4          #define uchar unsigned char 
+   5          #define uint unsigned int 
+   6          
+   7          
+   8          
+   9          //按键对应的P1IO口的电平
+  10          #define IN_1_1 0x11
+  11          #define IN_1_2 0x21
+  12          #define IN_1_3 0x41
+  13          #define IN_1_4 0x81
+  14          #define IN_2_1 0x12
+  15          #define IN_2_2 0x22
+  16          #define IN_2_3 0x42
+  17          #define IN_2_4 0x82
+  18          #define OUT_1_UP 0x14
+  19          #define OUT_2_UP 0x24
+  20          #define OUT_2_DOWN 0x44
+  21          #define OUT_3_UP 0x84
+  22          #define OUT_3_DOWN 0x18
+  23          #define OUT_4_DOWN 0x28
+  24          
+  25          
+  26          uchar liftUp1[4] = {0,0,0,0};    //1号上行请求队列
+  27          uchar liftDown1[4] = {0,0,0,0};  //1号下行请求队列
+  28          uchar liftUp2[4] = {0,0,0,0};    //2号上行请求队列
+  29          uchar liftDown2[4] = {0,0,0,0};  //2号下行请求队列
+  30          uchar liftUp[4] = {0,0,0,0};     //电梯外部上行请求
+  31          uchar liftDown[4] = {0,0,0,0};   //电梯外部下行请求
+  32          uchar isUpHandled[4] = {0,0,0,0};   //外部请求是否被处理，1表示被处理
+  33          uchar isDownHandled[4] = {0,0,0,0}; //外部请求是否被处理，1表示被处理
+  34          uchar currentLevel1 = 1;         //1号电梯当前楼层 
+  35          uchar currentLevel2 = 1;         //2号电梯当前楼层 
+  36          uchar nextLevel1 = 1;            //1号电梯下一个要到达的楼层
+  37          uchar nextLevel2 = 1;            //2号电梯下一个要到达的楼层
+  38          
+  39          bit DIR1 = 1;                    //1号方向,1是向上,0是向下
+  40          bit DIR2 = 1;                    //2号方向,1是向上,0是向下
+  41          bit IDLE1 = 1;                   //1号是否空闲
+  42          bit IDLE2 = 1;                   //2号是否空闲
+  43          bit STOP1 = 1;                   //1号是否停止
+  44          bit STOP2 = 1;                   //2号是否停止
+  45          uchar TIMER1 = 0;                //用于定时1秒，20个周期后归0；
+  46          uchar TIMER2 = 0;                //用于定时1秒，20个周期后归0；
+  47          
+  48          //控制数码管的IO口
+  49          sbit LED_1_1 = P0^0;
+  50          sbit LED_1_2 = P0^1;
+  51          sbit LED_2_1 = P0^2;
+  52          sbit LED_2_2 = P0^3;
+  53          
+  54          
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 2   
+
+  55          //控制电梯内部LED的IO口
+  56          sbit LED_IN_1_1 = P2^0;
+  57          sbit LED_IN_1_2 = P2^1;
+  58          sbit LED_IN_1_3 = P2^2;
+  59          sbit LED_IN_1_4 = P2^3;
+  60          sbit LED_IN_2_1 = P2^4;
+  61          sbit LED_IN_2_2 = P2^5;
+  62          sbit LED_IN_2_3 = P2^6;
+  63          sbit LED_IN_2_4 = P2^7;
+  64          //控制电梯外部LED的IO口
+  65          sbit UP1 = P3^0;
+  66          sbit UP2 = P3^1;
+  67          sbit UP3 = P3^2;
+  68          sbit DOWN2 = P3^3;
+  69          sbit DOWN3 = P3^4;
+  70          sbit DOWN4 = P3^5;
+  71          //控制显示电梯上下LED的IO口
+  72          sbit LIFT1UP = P0^4;
+  73          sbit LIFT1DOWN = P0^5;
+  74          sbit LIFT2UP = P0^6;
+  75          sbit LIFT2DOWN = P0^7;
+  76          //控制开门的LED的IO口
+  77          sbit OPEN1 = P3^6;
+  78          sbit OPEN2 = P3^7;
+  79          
+  80          void init(){
+  81   1          int i = 0;
+  82   1          for(i=4; i>0; i--){
+  83   2              liftUp1[i] = 0;
+  84   2              liftDown1[i] = 0;
+  85   2              liftUp2[i] = 0;
+  86   2              liftDown2[i] = 0;
+  87   2              liftUp[i] = 0;
+  88   2              liftDown[i] = 0;
+  89   2          }
+  90   1          currentLevel1 = 1;         //1号电梯当前楼层 
+  91   1          currentLevel2 = 1;         //2号电梯当前楼层 
+  92   1          nextLevel1 = 1;            //1号电梯下一个要到达的楼层
+  93   1          nextLevel2 = 1;            //2号电梯下一个要到达的楼层
+  94   1      }
+  95          
+  96          /*
+  97           *  初始化定时器 
+  98           */
+  99          void initTimer(){
+ 100   1          TMOD = 0x01;
+ 101   1          TH0 = (65536-50000)/256; //设置初值为50000us,50ms的高四位
+ 102   1          TL0 = (65536-50000)%256; //设置初值为50000us,50ms的低四位
+ 103   1          ET0 = 1;                 //开启定时器0的中断
+ 104   1          EA = 1;                  //开启总中断
+ 105   1          TR0 = 1;                 //启动定时器0
+ 106   1          TIMER1 = 0;
+ 107   1      }
+ 108          
+ 109          /*
+ 110           *  延迟
+ 111           */
+ 112          void delay(uint time){
+ 113   1          int i=0,j=0;
+ 114   1          for(i=time; i>0; i--){
+ 115   2              for(j=120;j>0;j--){
+ 116   3      
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 3   
+
+ 117   3              }
+ 118   2          }
+ 119   1      }
+ 120          /*
+ 121           *  延迟1秒
+ 122           */
+ 123          void delay1s(){
+ 124   1        int i=0, j=0;
+ 125   1          for(i=120; i>0; i--){
+ 126   2              for(j=1000; j>0; j--){
+ 127   3      
+ 128   3              }
+ 129   2          }
+ 130   1      }
+ 131          
+ 132          /*
+ 133           *  延迟20毫秒
+ 134           */
+ 135          void delay20ms(){
+ 136   1        int i=0;
+ 137   1          for(i=2400; i>0; i--){
+ 138   2      
+ 139   2          }
+ 140   1      }
+ 141          
+ 142          /*
+ 143           *  延迟0.5秒,模拟电梯上升
+ 144           */
+ 145          void delay500ms(){
+ 146   1        int i=0, j=0;
+ 147   1          for(i=120; i>0; i--){
+ 148   2              for(j=500; j>0; j--){
+ 149   3      
+ 150   3              }
+ 151   2          }
+ 152   1      }
+ 153          
+ 154          /*
+ 155           *  用于扫描矩阵键盘,获取被按下的按钮信息
+ 156           */
+ 157          uchar keyboardScan(){
+ 158   1        uchar keyResult = 0x00;
+ 159   1        uchar highEnd = 0x00;
+ 160   1        uchar lowEnd = 0x00;
+ 161   1          P1 = 0xf0;   //初始化P1的八个口，前四个置为高电平，后四个置为低电平
+ 162   1          if((P1 & 0xf0) != 0xf0){  //如果P1的高四位不全为1，说明有键按下
+ 163   2              delay20ms();  //延时去抖动
+ 164   2              if((P1 & 0xf0) != 0xf0){  //按钮确实被按下
+ 165   3                  highEnd = P1 ^ 0xf0;
+ 166   3                  P1 = 0x0f;
+ 167   3                  lowEnd = P1 ^ 0x0f;
+ 168   3                  return highEnd | lowEnd;
+ 169   3              }
+ 170   2          }
+ 171   1          return 0x00;
+ 172   1      }
+ 173          
+ 174          
+ 175          uchar sum(uchar level[]){
+ 176   1          int i=0;
+ 177   1          uchar levels = 0;
+ 178   1          for(i=4; i>0; i--){
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 4   
+
+ 179   2              levels += level[i-1];
+ 180   2          }
+ 181   1          return levels;
+ 182   1      }
+ 183          
+ 184          /*
+ 185           *  按键处理事件
+ 186           */
+ 187          void keyProcess(){
+ 188   1          uchar key = keyboardScan();
+ 189   1          switch (key)
+ 190   1          {
+ 191   2          case IN_1_1:
+ 192   2              if(currentLevel1 > 1){
+ 193   3                  liftDown1[0] = 1;
+ 194   3              }
+ 195   2              //LED_IN_1_1 = 0;
+ 196   2              break;
+ 197   2          case IN_1_2:
+ 198   2              if(currentLevel1 > 2){
+ 199   3                  liftDown1[1] = 1;
+ 200   3              }else if (currentLevel1 < 2){
+ 201   3                  liftUp1[1] = 1; 
+ 202   3              }
+ 203   2              //LED_IN_1_2 = 0;
+ 204   2              break;
+ 205   2          case IN_1_3:
+ 206   2              if(currentLevel1 > 3){
+ 207   3                  liftDown1[2] = 1;
+ 208   3              }else if (currentLevel1 < 3){
+ 209   3                  liftUp1[2] = 1; 
+ 210   3              }
+ 211   2              //LED_IN_1_3 = 0;
+ 212   2              break;
+ 213   2          case IN_1_4:
+ 214   2              if (currentLevel1 < 4){
+ 215   3                  liftUp1[3] = 1; 
+ 216   3              }
+ 217   2              //LED_IN_1_4 = 0;
+ 218   2              break;
+ 219   2          case IN_2_1:
+ 220   2              if(currentLevel2 > 1){
+ 221   3                  liftDown2[0] = 1;
+ 222   3              }
+ 223   2              //LED_IN_2_1 = 0;
+ 224   2              break;
+ 225   2          case IN_2_2:
+ 226   2              if(currentLevel2 > 2){
+ 227   3                  liftDown2[1] = 1;
+ 228   3              }else if (currentLevel2 < 2){ 
+ 229   3                  liftUp2[1] = 1;
+ 230   3              }
+ 231   2              //LED_IN_2_2 = 0;
+ 232   2              break;
+ 233   2          case IN_2_3:
+ 234   2              if(currentLevel2 > 3){
+ 235   3                  liftDown2[2] = 1;
+ 236   3              }else if (currentLevel2 < 3){ 
+ 237   3                  liftUp2[2] = 1;
+ 238   3              }
+ 239   2              //LED_IN_2_3 = 0;
+ 240   2              break;
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 5   
+
+ 241   2          case IN_2_4:
+ 242   2              if (currentLevel2 < 4){ 
+ 243   3                  liftUp2[3] = 1;
+ 244   3              }
+ 245   2              //LED_IN_2_4 = 0;
+ 246   2              break;
+ 247   2      
+ 248   2      
+ 249   2          case OUT_1_UP:
+ 250   2              //if(nextLevel1 != 1 & nextLevel2 != 1){
+ 251   2                  liftUp[0] = 1;
+ 252   2              //}
+ 253   2              break;
+ 254   2      
+ 255   2      
+ 256   2          case OUT_2_DOWN:
+ 257   2              //if(!(!DIR1 & nextLevel1 == 2) & !(!DIR2 & nextLevel2 == 2)){
+ 258   2                  liftDown[1] = 1;
+ 259   2              //}
+ 260   2              break;
+ 261   2      
+ 262   2      
+ 263   2          case OUT_2_UP:
+ 264   2              //if(!(DIR1 & nextLevel1 == 2) & !(DIR2 & nextLevel2 == 2)){
+ 265   2                  liftUp[1] = 1;
+ 266   2              //}
+ 267   2              break;
+ 268   2          case OUT_3_DOWN:
+ 269   2              //if(!(!DIR1 & nextLevel1 == 3) & !(!DIR2 & nextLevel2 == 3)){
+ 270   2                  liftDown[2] = 1;
+ 271   2              //}
+ 272   2              break;
+ 273   2          case OUT_3_UP:
+ 274   2              //if(!(DIR1 & nextLevel1 == 3) & !(DIR2 & nextLevel2 == 3)){
+ 275   2                  liftUp[2] = 1;
+ 276   2              //}
+ 277   2              break;
+ 278   2          case OUT_4_DOWN:
+ 279   2              //if(nextLevel1 != 4 & nextLevel2 != 4){
+ 280   2                  liftDown[3] = 1;
+ 281   2              //}
+ 282   2              break;
+ 283   2          default:
+ 284   2              break;
+ 285   2          }
+ 286   1      }
+ 287          
+ 288          /*
+ 289           *  显示楼层
+ 290           */
+ 291          void display(){
+ 292   1          int i = 0;
+ 293   1          switch (currentLevel1)
+ 294   1          {
+ 295   2          case 1:
+ 296   2              LED_1_1 = 0;
+ 297   2              LED_1_2 = 0;
+ 298   2              break;
+ 299   2          case 2:
+ 300   2              LED_1_1 = 1;
+ 301   2              LED_1_2 = 0;
+ 302   2              break;
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 6   
+
+ 303   2          case 3:
+ 304   2              LED_1_1 = 0;
+ 305   2              LED_1_2 = 1;
+ 306   2              break;
+ 307   2          case 4:
+ 308   2              LED_1_1 = 1;
+ 309   2              LED_1_2 = 1;
+ 310   2              break;
+ 311   2          default:
+ 312   2              break;
+ 313   2          }
+ 314   1      
+ 315   1          switch (currentLevel2)
+ 316   1          {
+ 317   2          case 1:
+ 318   2              LED_2_1 = 0;
+ 319   2              LED_2_2 = 0;
+ 320   2              break;
+ 321   2          case 2:
+ 322   2              LED_2_1 = 1;
+ 323   2              LED_2_2 = 0;
+ 324   2              break;
+ 325   2          case 3:
+ 326   2              LED_2_1 = 0;
+ 327   2              LED_2_2 = 1;
+ 328   2              break;
+ 329   2          case 4:
+ 330   2              LED_2_1 = 1;
+ 331   2              LED_2_2 = 1;
+ 332   2              break;
+ 333   2          default:
+ 334   2              break;
+ 335   2          }
+ 336   1          LED_IN_1_1 = !(liftUp1[0] | liftDown1[0]);
+ 337   1          LED_IN_1_2 = !(liftUp1[1] | liftDown1[1]);
+ 338   1          LED_IN_1_3 = !(liftUp1[2] | liftDown1[2]);
+ 339   1          LED_IN_1_4 = !(liftUp1[3] | liftDown1[3]);
+ 340   1          LED_IN_2_1 = !(liftUp2[0] | liftDown2[0]);
+ 341   1          LED_IN_2_2 = !(liftUp2[1] | liftDown2[1]);
+ 342   1          LED_IN_2_3 = !(liftUp2[2] | liftDown2[2]);
+ 343   1          LED_IN_2_4 = !(liftUp2[3] | liftDown2[3]);
+ 344   1          UP1 = !liftUp[0];
+ 345   1          UP2 = !liftUp[1];
+ 346   1          UP3 = !liftUp[2];
+ 347   1          DOWN2 = !liftDown[1];
+ 348   1          DOWN3 = !liftDown[2];
+ 349   1          DOWN4 = !liftDown[3];
+ 350   1          LIFT1UP = !(sum(liftUp1) == 0);
+ 351   1          LIFT2UP = !(sum(liftDown1) == 0);
+ 352   1          LIFT1DOWN = !(sum(liftUp) == 0);
+ 353   1          LIFT2DOWN = !(sum(liftDown) == 0);
+ 354   1          if(STOP1 & !IDLE1){
+ 355   2              OPEN1 = 0;
+ 356   2          }else{
+ 357   2              OPEN1 = 1;
+ 358   2          }
+ 359   1          
+ 360   1          if(STOP2 & !IDLE2){
+ 361   2              OPEN2 = 0;
+ 362   2          }else{
+ 363   2              OPEN2 = 1;
+ 364   2          }
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 7   
+
+ 365   1      }
+ 366          
+ 367          /*
+ 368           *  定时器1中断函数
+ 369           */
+ 370          void timerIsr() interrupt 1{
+ 371   1          if(TIMER1 <= 20){
+ 372   2              TH0 = (65536-50000)/256; //设置初值为50000us,50ms的高四位
+ 373   2              TL0 = (65536-50000)%256; //设置初值为50000us,50ms的低四位
+ 374   2              TIMER1 ++;
+ 375   2              if(TIMER1 == 20){
+ 376   3                  display();
+ 377   3              }
+ 378   2          }
+ 379   1      }
+ 380          
+ 381          /*
+ 382           *  去下一层
+ 383           */
+ 384          void gotoNextLevel1(){
+ 385   1          if(nextLevel1 == currentLevel1){
+ 386   2              int j = 0;
+ 387   2              if(DIR1){
+ 388   3                  if(liftUp[currentLevel1-1] == 1){
+ 389   4                      STOP1 = 1;
+ 390   4                      IDLE1 = 0;
+ 391   4                      liftUp1[currentLevel1-1] = 0;
+ 392   4                      liftUp[currentLevel1-1] = 0;
+ 393   4                      for(j=70;j>0;j--){
+ 394   5                          delay20ms();
+ 395   5                          keyProcess();
+ 396   5                          display();
+ 397   5                      }
+ 398   4                      //IDLE1 = 1;
+ 399   4                      STOP1 = 0;
+ 400   4                  }
+ 401   3              }else{
+ 402   3                  if(liftDown[currentLevel1-1] == 1){
+ 403   4                      STOP1 = 1;
+ 404   4                      IDLE1 = 0;
+ 405   4                      liftDown1[currentLevel1-1] = 0;
+ 406   4                      liftDown[currentLevel1-1] = 0;
+ 407   4                      for(j=70;j>0;j--){
+ 408   5                          delay20ms();
+ 409   5                          keyProcess();
+ 410   5                          display();
+ 411   5                      }
+ 412   4                      //IDLE1 = 1;
+ 413   4                      STOP1 = 0;
+ 414   4                  }
+ 415   3              }
+ 416   2          }
+ 417   1      
+ 418   1          if(nextLevel1 > currentLevel1){
+ 419   2              int i=0,j=0;
+ 420   2              DIR1 = 1;
+ 421   2              IDLE1 = 0;
+ 422   2              //LED_IN_1_4 = 0;
+ 423   2              STOP1 = 0;
+ 424   2              for(i=35;i>0;i--){
+ 425   3                  delay20ms();
+ 426   3                  keyProcess();
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 8   
+
+ 427   3                  display();
+ 428   3              }
+ 429   2              currentLevel1++;
+ 430   2              liftUp1[currentLevel1-1] = 0;
+ 431   2              liftUp[currentLevel1-1] = 0;
+ 432   2              display();
+ 433   2              if(currentLevel1 == nextLevel1){
+ 434   3                  STOP1 = 1;
+ 435   3                  for(j=70;j>0;j--){
+ 436   4                      delay20ms();
+ 437   4                      keyProcess();
+ 438   4                      display();
+ 439   4                  }
+ 440   3                  STOP1 = 0;
+ 441   3                  //当所内外部都没有请求的时候，电梯闲置
+ 442   3                  if((sum(liftUp1) == 0) & (sum(liftDown1) == 0) & (sum(liftUp) == 0) & (sum(liftDown) == 0)){
+ 443   4                      IDLE1 = 1;
+ 444   4                  } 
+ 445   3              }
+ 446   2              return;
+ 447   2          }
+ 448   1      
+ 449   1          if(nextLevel1 < currentLevel1){
+ 450   2              int i=0,j=0;
+ 451   2              DIR1 = 0;
+ 452   2              IDLE1 = 0;
+ 453   2              STOP1 = 0;
+ 454   2              for(i=35;i>0;i--){
+ 455   3                  delay20ms();
+ 456   3                  keyProcess();
+ 457   3                  display();
+ 458   3              }
+ 459   2              currentLevel1--;
+ 460   2              liftDown1[currentLevel1-1] = 0;
+ 461   2              liftDown[currentLevel1-1] = 0;
+ 462   2              display();
+ 463   2              if(currentLevel1 == nextLevel1){
+ 464   3                  STOP1 = 1;
+ 465   3                  for(j=70;j>0;j--){
+ 466   4                      delay20ms();
+ 467   4                      keyProcess();
+ 468   4                      display();
+ 469   4                  }
+ 470   3                  STOP1 = 0;
+ 471   3                  //当所内外部都没有请求的时候，电梯闲置
+ 472   3                  if((sum(liftUp1) == 0) & (sum(liftDown1) == 0) & (sum(liftUp) == 0) & (sum(liftDown) == 0)){
+ 473   4                      IDLE1 = 1;
+ 474   4                  }
+ 475   3              }
+ 476   2              return;
+ 477   2          }
+ 478   1      }
+ 479          
+ 480          /*
+ 481           *  1号电梯工作
+ 482           */
+ 483          void work1(){
+ 484   1          //电梯空闲就会自动扫描外部请求
+ 485   1          if(IDLE1){
+ 486   2              if(DIR1){
+ 487   3                  uchar temp = currentLevel1;
+ 488   3                  //LIFT1UP = 1;
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 9   
+
+ 489   3                  while(temp > 0 && !(liftUp[temp-1] | liftDown[temp-1])){
+ 490   4                      temp--;
+ 491   4                  }
+ 492   3                  if(temp > 0){
+ 493   4                      if(nextLevel2 != temp){
+ 494   5                          nextLevel1 = temp;
+ 495   5                          //LIFT1UP = 0;
+ 496   5                          //DIR1 = 0;
+ 497   5                      }
+ 498   4                  }
+ 499   3              }else{
+ 500   3                  uchar temp = currentLevel1;
+ 501   3                  while(temp < 5 && !(liftUp[temp-1] | liftDown[temp-1])){
+ 502   4                      temp++;
+ 503   4                  }
+ 504   3                  if(temp < 5){
+ 505   4                      if(nextLevel2 != temp){
+ 506   5                          nextLevel1 = temp;
+ 507   5                          //DIR1 = 1;
+ 508   5                      }
+ 509   4                  }
+ 510   3              }
+ 511   2          }
+ 512   1          //电梯方向向上
+ 513   1          if(DIR1){
+ 514   2              uchar temp = currentLevel1;
+ 515   2              //问题出在这里   temp从currentlevel开始，那么外部的低于currentLevel的请求无�
+             -�处理
+ 516   2              while ((temp < 5) && !(liftUp1[temp-1] | (liftUp[temp-1] & !(DIR1 & nextLevel2 == temp)))){       
+             -   //当有电梯内部请求，或有另一部电梯未响应的外部请求，则响应
+ 517   3                  temp++;
+ 518   3              }
+ 519   2              if(temp < 5){
+ 520   3                  nextLevel1 = temp;
+ 521   3                  //表示外部请求已被处理
+ 522   3                  //liftUp[temp-1] = 0;
+ 523   3              }else{
+ 524   3                  DIR1 = 0;
+ 525   3              }
+ 526   2          }else{
+ 527   2              uchar temp = currentLevel1;
+ 528   2              while ((temp > 0) && !(liftDown1[temp-1] | (liftDown[temp-1] & !(!DIR1 & nextLevel2 == temp)))){
+ 529   3                  temp--;
+ 530   3              }
+ 531   2              if(temp > 0){
+ 532   3                  nextLevel1 = temp;
+ 533   3                  //表示外部请求已被处理
+ 534   3                  //liftDown[temp-1] = 0;
+ 535   3              }else{
+ 536   3                  DIR1 = 1;   
+ 537   3              }
+ 538   2          }
+ 539   1          gotoNextLevel1();
+ 540   1      }
+ 541          
+ 542          
+ 543          /*
+ 544           *  去下一层
+ 545           */
+ 546          void gotoNextLevel2(){
+ 547   1          if(nextLevel2 == currentLevel2){
+ 548   2              int j = 0;
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 10  
+
+ 549   2              if(DIR2){
+ 550   3                  if(liftUp[currentLevel2-1] == 1){
+ 551   4                      STOP2 = 1;
+ 552   4                      IDLE2 = 0;
+ 553   4                      liftUp2[currentLevel2-1] = 0;
+ 554   4                      liftUp[currentLevel2-1] = 0;
+ 555   4                      for(j=70;j>0;j--){
+ 556   5                          delay20ms();
+ 557   5                          keyProcess();
+ 558   5                          display();
+ 559   5                      }
+ 560   4                      //IDLE2 = 1;
+ 561   4                      STOP2 = 0;
+ 562   4                  }
+ 563   3              }else{
+ 564   3                  if(liftDown[currentLevel2-1] == 1){
+ 565   4                      STOP2 = 1;
+ 566   4                      IDLE2 = 0;
+ 567   4                      liftDown2[currentLevel2-1] = 0;
+ 568   4                      liftDown[currentLevel2-1] = 0;
+ 569   4                      for(j=70;j>0;j--){
+ 570   5                          delay20ms();
+ 571   5                          keyProcess();
+ 572   5                          display();
+ 573   5                      }
+ 574   4                      //IDLE2 = 1;
+ 575   4                      STOP2 = 0;
+ 576   4                  }
+ 577   3              }
+ 578   2          }
+ 579   1      
+ 580   1          if(nextLevel2 > currentLevel2){
+ 581   2              int i=0,j=0;
+ 582   2              //LED_IN_1_4 = 0;
+ 583   2              DIR2 = 1;
+ 584   2              IDLE2 = 0;
+ 585   2              STOP2 = 0;
+ 586   2              for(i=35;i>0;i--){
+ 587   3                  delay20ms();
+ 588   3                  keyProcess();
+ 589   3                  display();
+ 590   3              }
+ 591   2              currentLevel2++;
+ 592   2              liftUp2[currentLevel2-1] = 0;
+ 593   2              liftUp[currentLevel2-1] = 0;
+ 594   2              display();
+ 595   2              if(currentLevel2 == nextLevel2){
+ 596   3                  STOP2 = 1;
+ 597   3                  for(j=70;j>0;j--){
+ 598   4                      delay20ms();
+ 599   4                      keyProcess();
+ 600   4                      display();
+ 601   4                  }
+ 602   3                  STOP2 = 0;
+ 603   3                  //当所内外部都没有请求的时候，电梯闲置
+ 604   3                  if((sum(liftUp2) == 0) & (sum(liftDown2) == 0) & (sum(liftUp) == 0) & (sum(liftDown) == 0)){
+ 605   4                      IDLE2 = 1;
+ 606   4                  } 
+ 607   3              }
+ 608   2              return;
+ 609   2          }
+ 610   1      
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 11  
+
+ 611   1          if(nextLevel2 < currentLevel2){
+ 612   2              int i=0,j=0;
+ 613   2              DIR2 = 0;
+ 614   2              IDLE2 = 0;
+ 615   2              STOP2 = 0;
+ 616   2              for(i=35;i>0;i--){
+ 617   3                  delay20ms();
+ 618   3                  keyProcess();
+ 619   3                  display();
+ 620   3              }
+ 621   2              currentLevel2--;
+ 622   2              liftDown2[currentLevel2-1] = 0;
+ 623   2              liftDown[currentLevel2-1] = 0;
+ 624   2              display();
+ 625   2              if(currentLevel2 == nextLevel2){
+ 626   3                  STOP2 = 1;
+ 627   3                  for(j=70;j>0;j--){
+ 628   4                      delay20ms();
+ 629   4                      keyProcess();
+ 630   4                      display();
+ 631   4                  }
+ 632   3                  STOP2 = 0;
+ 633   3                  //当所内外部都没有请求的时候，电梯闲置
+ 634   3                  if((sum(liftUp2) == 0) & (sum(liftDown2) == 0) & (sum(liftUp) == 0) & (sum(liftDown) == 0)){
+ 635   4                      IDLE2 = 1;
+ 636   4                  } 
+ 637   3              }
+ 638   2              return;
+ 639   2          }
+ 640   1      }
+ 641          
+ 642          /*
+ 643           *  1号电梯工作
+ 644           */
+ 645          void work2(){
+ 646   1          //电梯空闲就会自动扫描外部请求
+ 647   1          if(IDLE2){
+ 648   2              if(DIR2){
+ 649   3                  uchar temp = currentLevel2;
+ 650   3                  //LIFT1UP = 1;
+ 651   3                  while(temp > 0 && !(liftUp[temp-1] | liftDown[temp-1])){
+ 652   4                      temp--;
+ 653   4                  }
+ 654   3                  if(temp > 0){
+ 655   4                      if(nextLevel1 != temp){
+ 656   5                          nextLevel2 = temp;
+ 657   5                          //LIFT1UP = 0;
+ 658   5                          //DIR2 = 0;
+ 659   5                      }
+ 660   4                  }
+ 661   3              }else{
+ 662   3                  uchar temp = currentLevel2;
+ 663   3                  while(temp < 5 && !(liftUp[temp-1] | liftDown[temp-1])){
+ 664   4                      temp++;
+ 665   4                  }
+ 666   3                  if(temp < 5){
+ 667   4                      if(nextLevel1 != temp){
+ 668   5                          nextLevel2 = temp;
+ 669   5                          //DIR2 = 1;
+ 670   5                      }
+ 671   4                  }
+ 672   3              }
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 12  
+
+ 673   2          }
+ 674   1          //电梯方向向上
+ 675   1          if(DIR2){
+ 676   2              uchar temp = currentLevel2;
+ 677   2              while ((temp < 5) && !(liftUp2[temp-1] | (liftUp[temp-1] & !(DIR2 & nextLevel1 == temp)))){
+ 678   3                  temp++;
+ 679   3              }
+ 680   2              if(temp < 5){
+ 681   3                  nextLevel2 = temp;
+ 682   3                  //表示外部请求已被处理
+ 683   3                  //liftUp[temp-1] = 0;
+ 684   3              }else{
+ 685   3                  DIR2 = 0;
+ 686   3              }
+ 687   2          }else{
+ 688   2              uchar temp = currentLevel2;
+ 689   2              while ((temp > 0) && !(liftDown2[temp-1] | (liftDown[temp-1] & !(!DIR2 & nextLevel1 == temp)))){
+ 690   3                  temp--;
+ 691   3              }
+ 692   2              if(temp > 0){
+ 693   3                  nextLevel2 = temp;
+ 694   3                  //表示外部请求已被处理
+ 695   3                  //liftDown[temp-1] = 0;
+ 696   3              }else{
+ 697   3                  DIR2 = 1;   
+ 698   3              }
+ 699   2          }
+ 700   1          gotoNextLevel2();
+ 701   1      }
+ 702          
+ 703          void word(){
+ 704   1          work1();
+ 705   1          work2();
+ 706   1      }
+ 707          
+ 708          void main(){
+ 709   1          //init();
+ 710   1        while(1){
+ 711   2              P1 = 0xf0;
+ 712   2              keyProcess();
+ 713   2              display();
+ 714   2              work1();
+ 715   2              work2();
+ 716   2          }
+ 717   1      }
+ 718          
+ 719                  // if(DIR1 & DIR2){                            //两台电梯都向上，选择向上停靠次数�
+             -��少的电梯
+ 720                  //     if(sum(liftUp2) > sum(liftUp1)){
+ 721                  //         liftUp2[0] = 1;
+ 722                  //     }else{
+ 723                  //         liftUp1[0] = 1;
+ 724                  //     }
+ 725                  // }else if (!DIR1 & DIR2){                    //如果电梯1向下，电梯2向上，选择电�
+             -�1
+ 726                  //     liftUp1[0] = 1;
+ 727                  // }else if (DIR1 & !DIR2){                    //如果电梯2向下，电梯1向上，选择电�
+             -�2
+ 728                  //     liftUp2[0] = 1;
+ 729                  // }else{                                      //如果两条电梯都下降，选择最近的一�
+             -��
+ 730                  //     if(currentLevel2 > currentLevel1){
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 13  
+
+ 731                  //         liftUp2[0] = 1;
+ 732                  //     }else{
+ 733                  //         liftUp1[0] = 1;
+ 734                  //     }
+ 735                  // }
+ 736          
+ 737                  // if(DIR1 & DIR2){                            //两台电梯都向上，选择向上停靠次数�
+             -��少的电梯
+ 738                  //     if(sum(liftUp2) > sum(liftUp1)){
+ 739                  //         liftDown2[1] = 1;
+ 740                  //     }else{
+ 741                  //         liftDown1[1] = 1;
+ 742                  //     }
+ 743                  // }else if (!DIR1 & DIR2){                    //如果电梯1向下，电梯2向上，
+ 744                  //     if(currentLevel1 >= 2){                 //如果电梯1当前楼层大于等于2，选择�
+             -�梯1
+ 745                  //         liftDown1[1] = 1;
+ 746                  //     }else{                                  //否则选择电梯2
+ 747                  //         liftDown2[1] = 1;
+ 748                  //     }
+ 749                  // }else if (DIR1 & !DIR2){                    //如果电梯2向下，电梯1向上，
+ 750                  //     if(currentLevel2 >= 2){                 //如果电梯2当前楼层大于等于2，选择�
+             -�梯2
+ 751                  //         liftDown2[1] = 1;
+ 752                  //     }else{                                  //否则选择电梯1
+ 753                  //         liftDown1[1] = 1;
+ 754                  //     }
+ 755                  // }else{                                      //如果两台电梯都下降，
+ 756                  //     if(currentLevel1 >= 2 & currentLevel2 >= 2){   //如果两台电梯的高度都大于等于
+             -2，选择近的
+ 757                  //         if(currentLevel2 > currentLevel1){
+ 758                  //             liftDown2[1] = 1; 
+ 759                  //         }else{
+ 760                  //             liftDown1[1] = 1;
+ 761                  //         }
+ 762                  //     }else if(currentLevel1 >= 2){           //只有第1部电梯大于2层选择电梯1
+ 763                  //         liftDown1[1] = 1;
+ 764                  //     }else if(currentLevel2 >= 2){           //只有第2部电梯大于2层选择电梯2
+ 765                  //         liftDown2[1] = 1; 
+ 766                  //     }else{                                  //否则选择向上停靠最少的电梯
+ 767                  //         if(sum(liftUp2) > sum(liftUp1)){
+ 768                  //             liftDown2[1] = 1;
+ 769                  //         }else{
+ 770                  //             liftDown1[1] = 1;
+ 771                  //         }
+ 772                  //     }
+ 773                  // }
+ 774          
+ 775          
+ 776                  // if(DIR1 & DIR2){                            //两台电梯都向上
+ 777                  //     if(currentLevel1 <= 2 & currentLevel2 <= 2){  //两台电梯都在2楼以下，选择最近
+             -的电梯
+ 778                  //         if(currentLevel2 > currentLevel1){  
+ 779                  //             liftUp2[1] = 1;
+ 780                  //         }else{
+ 781                  //             liftUp1[1] = 1;
+ 782                  //         }
+ 783                  //     }else if(currentLevel1 <= 2){            //只有1号电梯在2楼以下，选择1号
+ 784                  //         liftUp1[1] = 1;
+ 785                  //     }else if(currentLevel2 <= 2){            //只有2号电梯在2楼以下，选择2号
+ 786                  //         liftUp2[1] = 1;
+ 787                  //     }else{                                   //两台电梯都在2楼以上，选择向上和�
+C51 COMPILER V9.57.0.0   ELEVATOR                                                          04/30/2021 11:16:16 PAGE 14  
+
+             -�下
+ 788                  //         if(sum(liftUp2) > sum(liftUp1)){
+ 789                  //             liftUp2[0] = 1;
+ 790                  //         }else{
+ 791                  //             liftUp1[0] = 1;
+ 792                  //         }
+ 793                  //     }
+ 794                  // }else if (!DIR1 & DIR2){                    //如果电梯1向下，电梯2向上，选择电�
+             -�1
+ 795                  //     liftUp1[0] = 1;
+ 796                  // }else if (DIR1 & !DIR2){                    //如果电梯2向下，电梯1向上，选择电�
+             -�2
+ 797                  //     liftUp2[0] = 1;
+ 798                  // }else{                                      //如果两条电梯都下降，选择最近的一�
+             -��
+ 799                  //     if(currentLevel2 > currentLevel1){
+ 800                  //         liftUp2[0] = 1;
+ 801                  //     }else{
+ 802                  //         liftUp1[0] = 1;
+ 803                  //     }
+ 804                  // }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   2472    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     38      17
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      6    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
